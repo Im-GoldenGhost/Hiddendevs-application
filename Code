@@ -1,0 +1,290 @@
+-- Services
+local CollectionService = game:GetService("CollectionService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- Player and UI
+local player = game.Players.LocalPlayer
+local main = player.PlayerGui:WaitForChild("MainUI")
+local start = main:WaitForChild("Start")
+
+-- Sounds
+local click = ReplicatedStorage.Click
+local explosion = ReplicatedStorage.Explosion
+
+-- Game state
+local mines
+local flags
+local minesFlagged = 0
+local placedFlags = 0
+local rows = 14
+local columns = 19
+local cells
+local firstClick = false
+local canPlay = false
+local minMines = 35
+local maxMines = 45
+
+local setup
+
+-- Returns surrounding cells + mine count
+local function getMinesAroundCell(cell: TextButton)
+	local pos = tonumber(cell.Name)
+	local mineCount = 0
+
+	-- Get surrounded cells
+	local above = pos - columns
+	local below = pos + columns
+	local left = pos - 1
+	local right = pos + 1
+	local topLeft = above - 1
+	local topRight = above + 1
+	local bottomLeft = below - 1
+	local bottomRight = below + 1
+
+	-- Get grid position
+	local row = math.floor((pos - 1) / columns) + 1
+	local column = ((pos - 1) % columns) + 1
+
+	local surroundedCells = {
+		cells[above],
+		cells[below],
+		cells[left],
+		cells[right],
+		cells[topLeft],
+		cells[topRight],
+		cells[bottomLeft],
+		cells[bottomRight],
+	}
+
+	-- Edge cleanup to prevent wrapping around rows
+	if row == 1 then
+		surroundedCells[1] = nil
+		surroundedCells[5] = nil
+		surroundedCells[6] = nil
+	elseif row == rows then
+		surroundedCells[2] = nil
+		surroundedCells[7] = nil
+		surroundedCells[8] = nil
+	end
+
+	if column == 1 then
+		surroundedCells[3] = nil
+		surroundedCells[5] = nil
+		surroundedCells[7] = nil
+	elseif column == columns then
+		surroundedCells[4] = nil
+		surroundedCells[6] = nil
+		surroundedCells[8] = nil
+	end
+
+	-- Count nearby mines
+	for _, v: TextButton in pairs(surroundedCells) do
+		if v and v:GetAttribute("Mine") then
+			mineCount += 1
+		end
+	end
+
+	return surroundedCells, mineCount
+end
+
+-- Stops game and resets board
+local function stop(won: boolean, mine: TextButton?)
+	canPlay = false
+	mines = 0
+	flags = 0
+	placedFlags = 0
+	minesFlagged = 0
+	firstClick = false
+	main.Holder.Holder2.Interactable = false
+
+	-- Clear cell attributes
+	for _, v in ipairs(cells) do
+		v:SetAttribute("Revealed", nil)
+		v:SetAttribute("Flagged", nil)
+		v:SetAttribute("Mine", nil)
+	end
+
+	-- Mine hit feedback
+	if not won and mine then
+		local oldColor = mine.BackgroundColor3
+		for _ = 1, 3 do
+			mine.BackgroundColor3 = Color3.new(1, 0.666667, 0)
+			task.wait(0.3)
+			mine.BackgroundColor3 = oldColor
+			task.wait(0.3)
+		end
+		explosion:Play()
+	end
+
+	-- Fade board
+	for _, v in ipairs(cells) do
+		v.BackgroundTransparency = 1
+		v.TextColor3 = Color3.fromRGB(157, 167, 165)
+		v.Text = ""
+		task.wait(0.006)
+	end
+
+	-- Result text animation
+	local resultText = won and "You Win!" or "You Lose"
+	start.TextTransparency = 0
+	start.Text = ""
+
+	for i = 1, #resultText do
+		start.Text = resultText:sub(1, i)
+		task.wait(0.05)
+	end
+
+	task.wait(1.5)
+
+	for i = #resultText, 1, -1 do
+		start.Text = resultText:sub(1, i - 1)
+		task.wait(0.03)
+	end
+
+	local startText = "Click to start"
+	start.Text = ""
+	for i = 1, #startText do
+		start.Text = startText:sub(1, i)
+		task.wait(0.05)
+	end
+
+	start.Interactable = true
+end
+
+-- Input handling
+for _, Cell: TextButton in ipairs(main.Holder.Holder2:GetChildren()) do
+	if Cell:IsA("TextButton") then
+
+		-- Left click to reveal
+		Cell.MouseButton1Click:Connect(function()
+			if not canPlay then return end
+
+			-- First click safety
+			if not firstClick then
+				firstClick = true
+
+				if Cell:GetAttribute("Mine") then
+					mines -= 1
+					flags = mines
+					Cell:SetAttribute("Mine", nil)
+				end
+
+				local surroundedCells = getMinesAroundCell(Cell)
+				for _, v in ipairs(surroundedCells) do
+					if v and v:GetAttribute("Mine") then
+						mines -= 1
+						flags = mines
+						v:SetAttribute("Mine", nil)
+					end
+				end
+			end
+
+			if not Cell:GetAttribute("Flagged") then
+				click:Play()
+				Cell.Interactable = false
+
+				if Cell:GetAttribute("Mine") then
+					stop(false, Cell)
+					return
+				end
+
+				-- Opens a large area if there are no mines nearby
+				local queue = { Cell }
+				while #queue > 0 do
+					local current = table.remove(queue, 1)
+					local surroundedCells, mineCount = getMinesAroundCell(current)
+
+					if mineCount > 0 then
+						current.Text = tostring(mineCount)
+					else
+						current.Text = ""
+					end
+					current.BackgroundTransparency = 1
+					click:Play()
+
+					if mineCount == 0 then
+						for _, v in ipairs(surroundedCells) do
+							if v and not v:GetAttribute("Revealed") and not v:GetAttribute("Mine") then
+								v:SetAttribute("Revealed", true)
+								v.Interactable = false
+								table.insert(queue, v)
+							end
+						end
+					end
+					task.wait()
+				end
+			end
+		end)
+
+		-- Right click to flag
+		Cell.MouseButton2Click:Connect(function()
+			if not Cell:GetAttribute("Flagged") then
+				placedFlags += 1
+				Cell.Text = "⚠"
+				Cell.TextColor3 = Color3.fromRGB(255, 222, 92)
+				Cell:SetAttribute("Flagged", true)
+
+				if placedFlags == flags then
+					for _, v in ipairs(cells) do
+						if v:GetAttribute("Mine") and v:GetAttribute("Flagged") then
+							minesFlagged += 1
+							if minesFlagged == flags then
+								stop(true)
+							end
+						end
+					end
+					minesFlagged = 0
+				end
+			else
+				placedFlags -= 1
+				Cell.Text = ""
+				Cell.TextColor3 = Color3.fromRGB(157, 167, 165)
+				Cell:SetAttribute("Flagged", false)
+			end
+		end)
+	end
+end
+
+-- Game Setup
+setup = function()
+	cells = {}
+
+	for i, v in ipairs(main.Holder.Holder2:GetChildren()) do
+		if v:IsA("TextButton") then
+			v.Name = i
+			table.insert(cells, v)
+		end
+	end
+
+	for _, v in ipairs(cells) do
+		v.BackgroundTransparency = 0
+		v.Text = ""
+		task.wait(0.006)
+	end
+
+	mines = math.random(minMines, maxMines)
+	flags = mines
+
+	local placed = 0
+	while placed < mines do
+		local cell = cells[math.random(1, #cells)]
+		if not cell:GetAttribute("Mine") then
+			cell:SetAttribute("Mine", true)
+			placed += 1
+		end
+	end
+
+	for _, v in ipairs(cells) do
+		v.Interactable = true
+	end
+
+	main.Holder.Holder2.Interactable = true
+	canPlay = true
+end
+
+-- Start button
+start.MouseButton1Click:Connect(function()
+	start.Interactable = false
+	start.TextTransparency = 1
+	setup()
+end)

@@ -78,7 +78,7 @@ local function getMinesAroundCell(cell: TextButton)
 	end
 
 	-- Count nearby mines
-	for _, v: TextButton in pairs(surroundedCells) do
+	for _, v: TextButton in ipairs(surroundedCells) do
 		if v and v:GetAttribute("Mine") then
 			mineCount += 1
 		end
